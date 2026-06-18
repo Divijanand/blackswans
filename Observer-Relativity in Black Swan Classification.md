@@ -69,6 +69,6 @@ This is not a minor implementation detail — it is a structural design choice i
 
 ---
 
-## Open Question for Yevhen
+## Open Question
 
 > Should `f(S, M)`'s novelty and relevance terms be conditioned on the *simulation's internal actor priors*, or on an *external omniscient observer's prior*? Real historical cases (Altman/OpenAI board crisis) score very differently — Grey Rhino vs. Black Swan — depending on this choice, and the framework currently doesn't specify which is correct, or whether both should be computed and compared as a feature in their own right (i.e., the *gap* between insider and outsider novelty scores might itself be a meaningful signal).
