@@ -8,9 +8,10 @@ Your task is to act as an elite macroeconomic risk architect and classify the fo
 [ INSERT EVENT NAME AND BRIEF DESCRIPTION HERE ]
 
 ### Detailed Analysis Requirements:
-Pass the event through the following ordered decision procedure. Do not skip steps. Define your reasoning explicitly for each check.
+Pass the event through the following ordered decision procedure. Define your reasoning explicitly for each check.
 
 1. **The Topology Shift Test (Impact & Breadth):**
+   - **The Heuristic Gut-Check:** *Which load-bearing assumption does this event violate?* (Identify the core industry belief this event shatters—e.g., "Frontier AI requires infinite CapEx" or "Apple never opens iOS").
    - Did this event break the baseline operational or financial assumptions of the ecosystem, forcing a meaningful share of market players (not just the immediate parties) to rewrite their strategic direction?
    - Did it structurally rearrange the competitive leaderboard (who's ahead, who's behind, who is relevant)?
    - *If NO to either:* Is this an expected disruption that failed to materialize, breaking everyone's defensive hedges? (If yes -> Classify as Broken Prior. If no -> Classify as Neither/Standard Volatility).
@@ -28,7 +29,7 @@ Pass the event through the following ordered decision procedure. Do not skip ste
 
 ### Output Format:
 Provide your evaluation using these explicit headers:
-- **Executive Summary:** (2-sentence overview of the event's core mechanism)
+- **Load-Bearing Assumption Violated:** (1 sentence)
 - **Step-by-Step Check Walkthrough:** (Document your analysis for Check 1, Check 2, and Check 3)
 - **Final Taxonomic Classification:** [ Black Swan / Gray Rhino / Gray Swan / Broken Prior / Neither ]
-- **Strategic Trajectory Impact:** (Explain exactly how the competitive leaderboard or operational math was reset, or why it functions merely as standard volatility).
+- **Strategic Trajectory Impact:** (Explain exactly how the leaderboard or operational math was reset).
