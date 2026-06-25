@@ -5,7 +5,14 @@
 **Status:** Open question for discussion with Yevhen
 
 ---
+### A Note on Plausibility vs. Probability
+Traditional risk modeling routinely misses Black Swans because it optimizes for *probability*—calculating the likelihood of future events based on the historical frequency of the past (Gaussian distributions). A true topology-reshaping shock, by definition, has a historical probability of zero. 
 
+Therefore, this framework shifts the evaluative lens from probability to **plausibility**. 
+* **Probability** asks: *"How often has this happened before?"* (Which falsely filters out unprecedented shocks).
+* **Plausibility** asks: *"If a specific, rigid constraint in this ecosystem were to break, does a structurally and physically logical path exist for this scenario to unfold?"* 
+
+Black Swans are highly improbable, but entirely plausible. Our generation algorithm does not predict what *will* happen; it maps what *could* happen if a load-bearing constraint collapses.
 ## The Problem
 
 Applying the impact/novelty/relevance framework to real cases (e.g. the Altman/OpenAI board crisis, November 2023) exposes a structural ambiguity in how we define novelty.
