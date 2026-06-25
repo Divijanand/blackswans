@@ -1,9 +1,5 @@
 # Repository Re-Classification Report (New Framework Lens)
 
-This file documents the manual re-classification of our historical event repository against the updated two-pronged decision procedure: **Topology Shift (Strategic Realignment + Leaderboard Reshuffle)** and **Insider Horizon/Mechanics**.
-
----
-
 ## 1. DeepSeek R1 (January 2025)
 * **Rethink Direction?** Yes. It forced every US frontier lab to immediately slash API pricing and aggressively pivot toward distillation, reasoning models, and cost-efficiency over brute-force scaling.
 * **Reshuffle Leaderboard?** Yes. It shattered the proprietary pricing moat of US labs and instantly vaulted Chinese open-weight models to capability parity.
