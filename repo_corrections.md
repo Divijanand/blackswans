@@ -1,7 +1,5 @@
 # Repository Architecture Update: Strategic Core Corrections
 
-This file details the structural realignment of two major repository files. Following rigorous framework stress-testing, these cases have been updated to reflect accurate market mechanics rather than initial raw narrative presentation.
-
 ---
 
 ## Case 1: IBM Quantum Roadmaps & Fault-Tolerance Announcements (2024–2026)
