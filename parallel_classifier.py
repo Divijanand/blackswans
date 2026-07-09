@@ -5,7 +5,7 @@ import requests
 
 # Constants
 RESULTS_FILE = "results.jsonl"
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") # Make sure this is in your environment
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") 
 
 def load_existing_results():
     """Reads the JSONL file and returns a set of already processed event IDs."""
