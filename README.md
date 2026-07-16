@@ -10,8 +10,8 @@ script that runs that classification at scale across LLMs via
 
 ```
 prompts/      Classifier prompt templates (the reusable framework + case banks)
-scripts/      parallel_classifier.py — batch-runs events through an OpenRouter model
-tests/        pytest suite for scripts/parallel_classifier.py (no network calls)
+scripts/      parallel_classifier.py — batch-runs events; analyze_results.py — scores a run
+tests/        pytest suite for scripts/*.py (no network calls)
 data/         Input event sets (data/input) and processed output (data/processed)
 runs/         Classifier output JSONL lands here (gitignored, .gitkeep only)
 experiments/  Model tier list and engineering flags/risks for the scale run
@@ -40,8 +40,10 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
 cp .env.example .env             # fill in OPENROUTER_API_KEY
-export OPENROUTER_API_KEY="sk-or-..."   # or set it in .env and source it
 ```
+
+`parallel_classifier.py` loads `.env` automatically (via `python-dotenv`), so filling in
+`OPENROUTER_API_KEY` there is enough — no need to `export` it yourself unless you prefer to.
 
 ## Testing
 
@@ -103,6 +105,11 @@ Key flags (see `--help` for the full list):
 - `--structured-mode` — `json_schema` (default, strict structured output via a Pydantic
   model), `json_object`, or `none`; falls back automatically if a model/provider rejects
   the stricter mode
+- `--model-tier {tier1,tier2,tier3}` — sets the `--workers` default per
+  [`experiments/model-list.md`](experiments/model-list.md)'s tiers (5 / 15 / 20, per
+  `experiments/experiment-flags.md` Flag 7); ignored if you pass `--workers` explicitly
+- `--cost-per-million-input` / `--cost-per-million-output` — USD rates for the end-of-run
+  cost estimate (check the model's OpenRouter pricing page; omit to skip the estimate)
 - `--dry-run` — builds and prints the first event's prompt without calling the API
 
 The schema each model is asked to conform to is a Pydantic model
@@ -120,6 +127,36 @@ Output rows include `status` (`ok`, `invalid_schema`, `parse_error`, `request_er
 `thread_crash`), latency, token usage, and — on failure — the raw model response for
 manual review. Run output is gitignored; only `runs/.gitkeep` is tracked.
 
+Every real run (not `--dry-run`) also writes a manifest sidecar —
+`<output>.manifest.json` — recording the config that produced it (`model`, `prompt`,
+`labels`, `target_entity` default, `workers`, etc.), since output rows themselves only
+carry the model id. At the end of the run, the script also prints a token summary and
+(if `--cost-per-million-*` was given) a cost estimate.
+
 Before a full scale run, read [`experiments/experiment-flags.md`](experiments/experiment-flags.md)
 in full — it covers event-sourcing requirements (post-cutoff, no retrospective framing),
 disabling live search on Command R+/Grok, and per-tier worker limits.
+
+## Analyzing a run
+
+`scripts/analyze_results.py` reads a results file (and its manifest, if present) and
+prints a summary: status/classification/per-model breakdowns, latency stats, token totals
+and cost estimate.
+
+```bash
+python scripts/analyze_results.py --results runs/results.jsonl
+```
+
+To score accuracy against known-answer events, pass `--ground-truth` pointing at a
+**separate** JSONL file of `{"event_id": ..., "expected_classification": ...}` rows —
+kept out of the file you actually feed to `--input`, per
+[`experiments/experiment-flags.md`](experiments/experiment-flags.md) Flag 9 (seeded
+validation events must stay separate from the blind test set, and expected labels must
+never end up inside a prompt sent to the model):
+
+```bash
+python scripts/analyze_results.py \
+  --results runs/results.jsonl \
+  --ground-truth data/input/seeded-validation-labels.jsonl \
+  --cost-per-million-input 0.05 --cost-per-million-output 0.08
+```

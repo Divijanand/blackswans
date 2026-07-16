@@ -38,11 +38,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Set, Tuple, Type
 
+from dotenv import load_dotenv
 from openai import APIStatusError, OpenAI
 from pydantic import BaseModel, Field, create_model
 
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+## Suggested --workers defaults per experiments/model-list.md tier
+## (see experiments/experiment-flags.md, Flag 7).
+MODEL_TIER_WORKERS = {
+    "tier1": 5,
+    "tier2": 15,
+    "tier3": 20,
+}
 
 REQUIRED_MODEL_FIELDS = [
     "target_entity_context",
@@ -73,6 +82,18 @@ COMMON_TEXT_FIELDS = [
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def resolve_workers(workers_arg: Optional[int], model_tier: Optional[str]) -> int:
+    ## --workers (if given) always wins; otherwise fall back to the tier
+    ## default; otherwise a flat default of 10.
+    if workers_arg is not None:
+        return workers_arg
+
+    if model_tier is not None:
+        return MODEL_TIER_WORKERS[model_tier]
+
+    return 10
 
 
 def stable_event_id(event: Dict[str, Any]) -> str:
@@ -763,6 +784,85 @@ def append_jsonl(path: Path, row: Dict[str, Any]) -> None:
         f.flush()
 
 
+def add_usage(totals: Dict[str, int], usage: Optional[Dict[str, Any]]) -> None:
+    ## Accumulates a single row's token usage into a running totals dict,
+    ## in place, so run_classifier doesn't have to hold every row in memory.
+    if not usage:
+        return
+
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = usage.get(key)
+
+        if isinstance(value, (int, float)):
+            totals[key] = totals.get(key, 0) + value
+
+
+def estimate_cost(
+    totals: Dict[str, int],
+    cost_per_million_input: Optional[float],
+    cost_per_million_output: Optional[float],
+) -> Optional[float]:
+    if cost_per_million_input is None or cost_per_million_output is None:
+        return None
+
+    input_cost = totals.get("prompt_tokens", 0) / 1_000_000 * cost_per_million_input
+    output_cost = totals.get("completion_tokens", 0) / 1_000_000 * cost_per_million_output
+
+    return round(input_cost + output_cost, 6)
+
+
+def manifest_path_for(output_path: Path) -> Path:
+    return output_path.with_name(output_path.name + ".manifest.json")
+
+
+def build_run_manifest(
+    *,
+    input_path: Path,
+    output_path: Path,
+    prompt_path: Path,
+    model_id: str,
+    labels: Sequence[str],
+    structured_mode: str,
+    fallback_structured_mode: bool,
+    temperature: float,
+    workers: int,
+    id_field: str,
+    text_field: Optional[str],
+    target_entity_field: str,
+    default_target_entity: Optional[str],
+    event_count: int,
+) -> Dict[str, Any]:
+    ## Records the config a run was invoked with, since output rows only
+    ## carry the model id -- not the prompt/labels/target-entity used to
+    ## produce them.
+    return {
+        "started_at": utc_now_iso(),
+        "input": str(input_path),
+        "output": str(output_path),
+        "prompt": str(prompt_path),
+        "model": model_id,
+        "labels": list(labels),
+        "structured_mode": structured_mode,
+        "fallback_structured_mode": fallback_structured_mode,
+        "temperature": temperature,
+        "workers": workers,
+        "id_field": id_field,
+        "text_field": text_field,
+        "target_entity_field": target_entity_field,
+        "default_target_entity": default_target_entity,
+        "event_count": event_count,
+    }
+
+
+def write_run_manifest(output_path: Path, manifest: Dict[str, Any]) -> Path:
+    path = manifest_path_for(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return path
+
+
 def run_classifier(
     events: List[Dict[str, Any]],
     client: OpenAI,
@@ -776,6 +876,8 @@ def run_classifier(
     fallback_structured_mode: bool,
     temperature: float,
     retry_failed: bool,
+    cost_per_million_input: Optional[float] = None,
+    cost_per_million_output: Optional[float] = None,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -800,6 +902,7 @@ def run_classifier(
     completed = 0
     ok_count = 0
     fail_count = 0
+    usage_totals: Dict[str, int] = {}
 
     with futures.ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_event_id = {
@@ -843,6 +946,8 @@ def run_classifier(
             else:
                 fail_count += 1
 
+            add_usage(usage_totals, result.get("usage"))
+
             print(
                 f"[{completed}/{len(remaining_events)}] "
                 f"{event_id} -> {result.get('status')} "
@@ -853,6 +958,17 @@ def run_classifier(
         f"Done. Wrote results to {output_path}. "
         f"ok={ok_count}, failed_or_invalid={fail_count}"
     )
+
+    print(
+        f"Tokens: prompt={usage_totals.get('prompt_tokens', 0)} "
+        f"completion={usage_totals.get('completion_tokens', 0)} "
+        f"total={usage_totals.get('total_tokens', 0)}"
+    )
+
+    cost = estimate_cost(usage_totals, cost_per_million_input, cost_per_million_output)
+
+    if cost is not None:
+        print(f"Estimated cost: ${cost:.4f}")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -889,9 +1005,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--workers",
-        default=10,
+        default=None,
         type=int,
-        help="Number of concurrent requests. Start with 5-10 before increasing.",
+        help=(
+            "Number of concurrent requests. Defaults to --model-tier's suggested "
+            "value, or 10 if --model-tier isn't set."
+        ),
+    )
+
+    parser.add_argument(
+        "--model-tier",
+        default=None,
+        choices=sorted(MODEL_TIER_WORKERS),
+        help=(
+            "Sets the --workers default per experiments/model-list.md's tiers "
+            f"({MODEL_TIER_WORKERS}) -- tier1=small/free, tier2=paid mid-tier, "
+            "tier3=frontier. Ignored if --workers is also set."
+        ),
     )
 
     parser.add_argument(
@@ -981,6 +1111,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--cost-per-million-input",
+        default=None,
+        type=float,
+        help="USD per 1M prompt tokens, for the end-of-run cost estimate. Check the model's OpenRouter pricing page.",
+    )
+
+    parser.add_argument(
+        "--cost-per-million-output",
+        default=None,
+        type=float,
+        help="USD per 1M completion tokens, for the end-of-run cost estimate.",
+    )
+
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Load inputs and print the first prompt without calling OpenRouter.",
@@ -990,10 +1134,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    load_dotenv()
+
     parser = build_arg_parser()
     args = parser.parse_args()
 
-    if args.workers < 1:
+    workers = resolve_workers(args.workers, args.model_tier)
+
+    if workers < 1:
         parser.error("--workers must be >= 1")
 
     api_key = os.getenv("OPENROUTER_API_KEY")
@@ -1044,6 +1192,25 @@ def main() -> int:
         max_retries=args.max_retries,
     )
 
+    manifest = build_run_manifest(
+        input_path=args.input,
+        output_path=args.output,
+        prompt_path=args.prompt,
+        model_id=args.model,
+        labels=labels,
+        structured_mode=args.structured_mode,
+        fallback_structured_mode=not args.no_structured_fallback,
+        temperature=args.temperature,
+        workers=workers,
+        id_field=args.id_field,
+        text_field=args.text_field,
+        target_entity_field=args.target_entity_field,
+        default_target_entity=args.target_entity,
+        event_count=len(events),
+    )
+    manifest_path = write_run_manifest(args.output, manifest)
+    print(f"Wrote run manifest to {manifest_path}")
+
     run_classifier(
         events=events,
         client=client,
@@ -1052,11 +1219,13 @@ def main() -> int:
         labels=labels,
         response_model=response_model,
         output_path=args.output,
-        workers=args.workers,
+        workers=workers,
         structured_mode=args.structured_mode,
         fallback_structured_mode=not args.no_structured_fallback,
         temperature=args.temperature,
         retry_failed=args.retry_failed,
+        cost_per_million_input=args.cost_per_million_input,
+        cost_per_million_output=args.cost_per_million_output,
     )
 
     return 0
