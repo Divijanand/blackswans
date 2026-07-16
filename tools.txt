@@ -1,1 +1,26 @@
+## UV module -- Requirements
+## Semaphores -- Helps with restricting with amount work sent to workers
+## 
+
+Notes: For now as a place holder we have seeded.
+
+Apify, webscraper
+
+For scale, scalable solution, next steps <<
+Label our own data, start with different levels of models -perhaps-
+*manually annotate if needed*
+
+> Theoretical framework
+>> prototyping
+
+predictions >> analyze >> debugging if needed >> some sample >> predict 
+
+1. find out how many false positives if any
+2. mwhich model is good which model is bad, parameters, cost
+
+for now standby.
+
+coming up with a scalable solution
+research paper (maybe)
+
 
