@@ -187,13 +187,38 @@ def event_to_text(event: Dict[str, Any], text_field: Optional[str]) -> str:
     return json.dumps(event, ensure_ascii=False, sort_keys=True)
 
 
+def resolve_target_entity(
+    event: Dict[str, Any],
+    target_entity_field: str,
+    default_target_entity: Optional[str],
+) -> str:
+    ## Per-event target entity takes precedence; falls back to --target-entity
+    ## when the event doesn't specify its own.
+    value = event.get(target_entity_field)
+
+    if value is not None and str(value).strip():
+        return str(value).strip()
+
+    if default_target_entity and default_target_entity.strip():
+        return default_target_entity.strip()
+
+    raise ValueError(
+        "No target entity found. Set it per-event via "
+        f"'{target_entity_field}' (see --target-entity-field) or pass "
+        "--target-entity for a single default across the whole run."
+    )
+
+
 def normalize_events(
     raw_events: List[Dict[str, Any]],
     id_field: str,
     text_field: Optional[str],
+    target_entity_field: str,
+    default_target_entity: Optional[str],
 ) -> List[Dict[str, Any]]:
-    ## Ensures every event has internal _event_id and _event_text fields.
-    ## These underscore fields are used by the script only.
+    ## Ensures every event has internal _event_id, _event_text, and
+    ## _target_entity fields. These underscore fields are used by the
+    ## script only.
     normalized: List[Dict[str, Any]] = []
     seen_ids: Set[str] = set()
 
@@ -225,8 +250,16 @@ def normalize_events(
         if not event_text:
             raise ValueError(f"Event at index {idx} has no usable text.")
 
+        try:
+            target_entity = resolve_target_entity(
+                event, target_entity_field, default_target_entity
+            )
+        except ValueError as exc:
+            raise ValueError(f"Event at index {idx} ({event_id}): {exc}") from exc
+
         event["_event_id"] = event_id
         event["_event_text"] = event_text
+        event["_target_entity"] = target_entity
 
         normalized.append(event)
 
@@ -287,7 +320,7 @@ def make_response_model(labels: Sequence[str]) -> Type[BaseModel]:
     classification_type = Literal[tuple(labels)]  # type: ignore[valid-type]
 
     return create_model(
-        "EventClassification",
+        "BlackSwanClassification",
         target_entity_context=(
             str,
             Field(description="Target Entity Context: 1-sentence framing of the event from the Target Entity's perspective."),
@@ -311,19 +344,11 @@ def make_response_model(labels: Sequence[str]) -> Type[BaseModel]:
     )
 
 
-def build_messages(
-    classifier_prompt: str,
-    event: Dict[str, Any],
-    labels: Sequence[str],
-) -> List[Dict[str, str]]:
-    ## Builds OpenRouter chat messages.
-    clean_event = {
-        key: value
-        for key, value in event.items()
-        if not key.startswith("_")
-    }
-
-    json_instruction = "\n".join(
+def json_forcing_instruction(labels: Sequence[str]) -> str:
+    ## Only needed for the json_object/none fallback modes, where the
+    ## response shape isn't guaranteed by the API the way response_format
+    ## guarantees it for json_schema mode.
+    return "\n".join(
         [
             "You must return ONLY a valid JSON object.",
             "",
@@ -343,7 +368,19 @@ def build_messages(
         ]
     )
 
-    system_content = f"{classifier_prompt}\n\n{json_instruction}"
+
+def build_messages(
+    classifier_prompt: str,
+    event: Dict[str, Any],
+) -> List[Dict[str, str]]:
+    ## Builds OpenRouter chat messages. No raw-JSON-forcing instructions here:
+    ## response_format=<pydantic model> guarantees the output shape for the
+    ## default json_schema mode, so the prompt only needs to state the task.
+    clean_event = {
+        key: value
+        for key, value in event.items()
+        if not key.startswith("_")
+    }
 
     user_content = "\n".join(
         [
@@ -351,6 +388,9 @@ def build_messages(
             "",
             "EVENT_ID:",
             str(event["_event_id"]),
+            "",
+            "TARGET_ENTITY:",
+            str(event["_target_entity"]),
             "",
             "EVENT_TEXT:",
             str(event["_event_text"]),
@@ -361,7 +401,7 @@ def build_messages(
     )
 
     return [
-        {"role": "system", "content": system_content},
+        {"role": "system", "content": classifier_prompt},
         {"role": "user", "content": user_content},
     ]
 
@@ -400,6 +440,7 @@ def call_openrouter(
     client: OpenAI,
     model_id: str,
     messages: List[Dict[str, str]],
+    labels: Sequence[str],
     response_model: Type[BaseModel],
     structured_mode: str,
     fallback_structured_mode: bool,
@@ -443,6 +484,19 @@ def call_openrouter(
                 usage = completion.usage.model_dump() if completion.usage else None
                 return choice.message.content or "", usage, mode, choice.message.parsed
 
+            ## json_object/none aren't schema-guaranteed, so (unlike
+            ## json_schema mode) they still need the explicit JSON-forcing
+            ## instruction appended to the system prompt.
+            fallback_messages = [
+                {
+                    **messages[0],
+                    "content": messages[0]["content"]
+                    + "\n\n"
+                    + json_forcing_instruction(labels),
+                },
+                *messages[1:],
+            ]
+
             create_kwargs: Dict[str, Any] = {}
 
             if mode == "json_object":
@@ -450,7 +504,7 @@ def call_openrouter(
 
             completion = client.chat.completions.create(
                 model=model_id,
-                messages=messages,
+                messages=fallback_messages,
                 temperature=temperature,
                 **create_kwargs,
             )
@@ -632,6 +686,7 @@ def classify_event(
 
     base: Dict[str, Any] = {
         "event_id": event_id,
+        "target_entity": event["_target_entity"],
         "model": model_id,
         "classified_at": utc_now_iso(),
         "event": event_metadata(event),
@@ -640,7 +695,6 @@ def classify_event(
     messages = build_messages(
         classifier_prompt=classifier_prompt,
         event=event,
-        labels=labels,
     )
 
     try:
@@ -648,6 +702,7 @@ def classify_event(
             client=client,
             model_id=model_id,
             messages=messages,
+            labels=labels,
             response_model=response_model,
             structured_mode=structured_mode,
             fallback_structured_mode=fallback_structured_mode,
@@ -852,6 +907,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--target-entity-field",
+        default="target_entity",
+        help=(
+            "Field containing the per-event Target Entity for the "
+            "Company-Level Classifier (see prompts/Company-Level Classifier.md). "
+            "Falls back to --target-entity when an event doesn't set it."
+        ),
+    )
+
+    parser.add_argument(
+        "--target-entity",
+        default=None,
+        help=(
+            "Default Target Entity to use for every event that doesn't set "
+            "its own via --target-entity-field, e.g. \"Apple\" or \"OpenAI\"."
+        ),
+    )
+
+    parser.add_argument(
         "--labels",
         default=",".join(DEFAULT_LABELS),
         help=(
@@ -943,6 +1017,8 @@ def main() -> int:
         raw_events=raw_events,
         id_field=args.id_field,
         text_field=args.text_field,
+        target_entity_field=args.target_entity_field,
+        default_target_entity=args.target_entity,
     )
 
     print(f"Loaded {len(events)} events from {args.input}")
@@ -954,7 +1030,6 @@ def main() -> int:
         messages = build_messages(
             classifier_prompt=classifier_prompt,
             event=first,
-            labels=labels,
         )
 
         print("\n--- DRY RUN: first event messages ---\n")

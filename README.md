@@ -1,8 +1,10 @@
 # Black Swans — Project Jupiter
 
 Domain-agnostic framework for classifying market/industry events as **Black Swan**,
-**Gray Rhino**, **Gray Swan**, **Broken Prior**, or **Neither**, plus a script that
-runs that classification at scale across LLMs via [OpenRouter](https://openrouter.ai).
+**Gray Rhino**, **Gray Swan**, **White Swan**, **Broken Prior**, or **Neither**, plus a
+script that runs that classification at scale across LLMs via
+[OpenRouter](https://openrouter.ai), evaluated relative to a specific **Target Entity**
+(see [`Company-Level Classifier.md`](prompts/Company-Level%20Classifier.md)).
 
 ## Repo structure
 
@@ -54,26 +56,35 @@ support to enforce the response shape.
 python scripts/parallel_classifier.py \
   --input data/input/test_events.jsonl \
   --output runs/results.jsonl \
-  --prompt "prompts/Shock Classifier.md" \
+  --prompt "prompts/Company-Level Classifier.md" \
   --model "meta-llama/llama-3.3-70b-instruct" \
+  --target-entity "Apple" \
   --workers 10
 ```
 
 Key flags (see `--help` for the full list):
 
 - `--input` — `.jsonl`, `.json` (list or `{"events": [...]}`), or `.csv`
-- `--labels` — comma-separated classification labels (defaults to the five taxonomic
+- `--target-entity` — default Target Entity for every event (the Company-Level Classifier
+  evaluates a shock relative to a specific company/actor); an event can override this with
+  its own `target_entity` field (configurable via `--target-entity-field`)
+- `--labels` — comma-separated classification labels (defaults to the six taxonomic
   categories above)
 - `--structured-mode` — `json_schema` (default, strict structured output via a Pydantic
   model), `json_object`, or `none`; falls back automatically if a model/provider rejects
   the stricter mode
 - `--dry-run` — builds and prints the first event's prompt without calling the API
 
-The schema each model is asked to conform to (`classification`, three check verdicts,
-load-bearing assumption, reasoning) is a Pydantic model built in
-[`make_response_model`](scripts/parallel_classifier.py) — the `classification` field's
-allowed values come straight from `--labels`, so there's no separate schema file to keep
-in sync.
+The schema each model is asked to conform to is a Pydantic model
+(`BlackSwanClassification`) built in
+[`make_response_model`](scripts/parallel_classifier.py), with one field per header in the
+Company-Level Classifier's `Output Format` section: `target_entity_context`,
+`load_bearing_assumption`, `check_walkthrough`, `classification`, `strategic_impact`. The
+`classification` field's allowed values come straight from `--labels`, so there's no
+separate schema file to keep in sync. Because `response_format` guarantees this shape,
+the prompt sent to the model doesn't need "return raw JSON" instructions in `json_schema`
+mode — those are only added back in for the `json_object`/`none` fallback modes, which
+aren't schema-guaranteed.
 
 Output rows include `status` (`ok`, `invalid_schema`, `parse_error`, `request_error`,
 `thread_crash`), latency, token usage, and — on failure — the raw model response for
