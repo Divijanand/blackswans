@@ -97,6 +97,18 @@ def test_build_messages_strips_underscore_fields_from_full_event_json():
     assert "_target_entity" not in user_content
 
 
+def test_build_messages_omits_domain_context_block_when_unset():
+    messages = build_messages("Classify this event.", _event())
+    assert "DOMAIN_CONTEXT" not in messages[1]["content"]
+
+
+def test_build_messages_includes_domain_context_block_when_set():
+    event = {**_event(), "_domain_context": "Apple enforces a 15-30% App Store commission."}
+    messages = build_messages("Classify this event.", event)
+    user_content = messages[1]["content"]
+    assert "DOMAIN_CONTEXT:\nApple enforces a 15-30% App Store commission." in user_content
+
+
 # -- json_forcing_instruction (fallback-mode only) -----------------------------
 
 def test_json_forcing_instruction_lists_all_required_fields():

@@ -230,16 +230,37 @@ def resolve_target_entity(
     )
 
 
+def resolve_domain_context(
+    event: Dict[str, Any],
+    domain_context_field: str,
+    default_domain_context: Optional[str],
+) -> Optional[str]:
+    ## Unlike target entity, domain context is optional (experiment-flags.md
+    ## Flag 6, Option A) -- returns None rather than raising when neither the
+    ## event nor a default is set.
+    value = event.get(domain_context_field)
+
+    if value is not None and str(value).strip():
+        return str(value).strip()
+
+    if default_domain_context and default_domain_context.strip():
+        return default_domain_context.strip()
+
+    return None
+
+
 def normalize_events(
     raw_events: List[Dict[str, Any]],
     id_field: str,
     text_field: Optional[str],
     target_entity_field: str,
     default_target_entity: Optional[str],
+    domain_context_field: str = "domain_context",
+    default_domain_context: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     ## Ensures every event has internal _event_id, _event_text, and
-    ## _target_entity fields. These underscore fields are used by the
-    ## script only.
+    ## _target_entity fields, plus _domain_context when available. These
+    ## underscore fields are used by the script only.
     normalized: List[Dict[str, Any]] = []
     seen_ids: Set[str] = set()
 
@@ -281,6 +302,9 @@ def normalize_events(
         event["_event_id"] = event_id
         event["_event_text"] = event_text
         event["_target_entity"] = target_entity
+        event["_domain_context"] = resolve_domain_context(
+            event, domain_context_field, default_domain_context
+        )
 
         normalized.append(event)
 
@@ -403,23 +427,34 @@ def build_messages(
         if not key.startswith("_")
     }
 
-    user_content = "\n".join(
-        [
-            "Classify the following news event.",
-            "",
-            "EVENT_ID:",
-            str(event["_event_id"]),
-            "",
-            "TARGET_ENTITY:",
-            str(event["_target_entity"]),
-            "",
-            "EVENT_TEXT:",
-            str(event["_event_text"]),
-            "",
-            "FULL_EVENT_JSON:",
-            json.dumps(clean_event, ensure_ascii=False, indent=2),
-        ]
-    )
+    content_lines = [
+        "Classify the following news event.",
+        "",
+        "EVENT_ID:",
+        str(event["_event_id"]),
+        "",
+        "TARGET_ENTITY:",
+        str(event["_target_entity"]),
+    ]
+
+    ## Domain grounding (experiment-flags.md, Flag 6, Option A): two events
+    ## with identical surface descriptions can score differently once you
+    ## know the domain mechanics. This is optional -- omitted when unset.
+    domain_context = event.get("_domain_context")
+
+    if domain_context:
+        content_lines += ["", "DOMAIN_CONTEXT:", str(domain_context)]
+
+    content_lines += [
+        "",
+        "EVENT_TEXT:",
+        str(event["_event_text"]),
+        "",
+        "FULL_EVENT_JSON:",
+        json.dumps(clean_event, ensure_ascii=False, indent=2),
+    ]
+
+    user_content = "\n".join(content_lines)
 
     return [
         {"role": "system", "content": classifier_prompt},
@@ -831,6 +866,8 @@ def build_run_manifest(
     target_entity_field: str,
     default_target_entity: Optional[str],
     event_count: int,
+    domain_context_field: str = "domain_context",
+    default_domain_context: Optional[str] = None,
 ) -> Dict[str, Any]:
     ## Records the config a run was invoked with, since output rows only
     ## carry the model id -- not the prompt/labels/target-entity used to
@@ -850,6 +887,8 @@ def build_run_manifest(
         "text_field": text_field,
         "target_entity_field": target_entity_field,
         "default_target_entity": default_target_entity,
+        "domain_context_field": domain_context_field,
+        "default_domain_context": default_domain_context,
         "event_count": event_count,
     }
 
@@ -1056,6 +1095,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--domain-context-field",
+        default="domain_context",
+        help=(
+            "Field containing per-event domain-mechanics grounding (experiment-flags.md "
+            "Flag 6, Option A) -- e.g. \"Apple's App Store enforces a mandatory 15-30%% "
+            "commission on in-app purchases...\". Optional; falls back to "
+            "--domain-context, and is omitted from the prompt entirely if neither is set."
+        ),
+    )
+
+    parser.add_argument(
+        "--domain-context",
+        default=None,
+        help="Default domain-mechanics context for every event that doesn't set its own.",
+    )
+
+    parser.add_argument(
         "--labels",
         default=",".join(DEFAULT_LABELS),
         help=(
@@ -1167,6 +1223,8 @@ def main() -> int:
         text_field=args.text_field,
         target_entity_field=args.target_entity_field,
         default_target_entity=args.target_entity,
+        domain_context_field=args.domain_context_field,
+        default_domain_context=args.domain_context,
     )
 
     print(f"Loaded {len(events)} events from {args.input}")
@@ -1206,6 +1264,8 @@ def main() -> int:
         text_field=args.text_field,
         target_entity_field=args.target_entity_field,
         default_target_entity=args.target_entity,
+        domain_context_field=args.domain_context_field,
+        default_domain_context=args.domain_context,
         event_count=len(events),
     )
     manifest_path = write_run_manifest(args.output, manifest)

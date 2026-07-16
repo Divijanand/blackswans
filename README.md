@@ -69,8 +69,9 @@ python scripts/parallel_classifier.py \
   --workers 1
 ```
 
-`data/input/yehven_events.jsonl` is intentionally left empty — it's meant to hold
-Yevhen's own event set, not fabricated data.
+`data/input/yehven_events.jsonl` is seeded with 5 more events from `research/` as a
+placeholder (ChatGPT launch, EU AI Act, Meta publisher suit, Apple Intelligence pivot, GT
+Advanced Technologies bankruptcy) — swap in Yevhen's own event set when he provides one.
 
 ## Running the classifier
 
@@ -108,6 +109,10 @@ Key flags (see `--help` for the full list):
 - `--model-tier {tier1,tier2,tier3}` — sets the `--workers` default per
   [`experiments/model-list.md`](experiments/model-list.md)'s tiers (5 / 15 / 20, per
   `experiments/experiment-flags.md` Flag 7); ignored if you pass `--workers` explicitly
+- `--domain-context` / `--domain-context-field` — optional domain-mechanics grounding
+  (`experiments/experiment-flags.md` Flag 6, Option A), inserted into the prompt as a
+  `DOMAIN_CONTEXT:` block when set per-event or as a run-wide default; omitted from the
+  prompt entirely if neither is set
 - `--cost-per-million-input` / `--cost-per-million-output` — USD rates for the end-of-run
   cost estimate (check the model's OpenRouter pricing page; omit to skip the estimate)
 - `--dry-run` — builds and prints the first event's prompt without calling the API
@@ -160,3 +165,16 @@ python scripts/analyze_results.py \
   --ground-truth data/input/seeded-validation-labels.jsonl \
   --cost-per-million-input 0.05 --cost-per-million-output 0.08
 ```
+
+`data/input/seeded-validation-set.jsonl` / `seeded-validation-labels.jsonl` are a first
+draft of that seeded set (7 events, including both perspectives of the NASDAQ/SpaceX
+benchmark case study already worked out in `Company-Level Classifier.md`). **The expected
+labels are Claude's draft reasoning through the framework, not yet confirmed by
+Yevhen** — each row in the labels file carries a `confidence` and `source` field; one
+(DeepSeek R1 vs. NVIDIA) is deliberately left "medium confidence, debatable" as a
+discussion point. Treat this as a starting point for the meeting, not ground truth.
+
+## CI
+
+[`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs `pytest` on every push
+and PR to `main`. It only runs the offline suite (no `OPENROUTER_API_KEY` needed/used).

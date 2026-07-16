@@ -8,6 +8,7 @@ from parallel_classifier import (
     load_prompt,
     normalize_events,
     parse_labels,
+    resolve_domain_context,
     resolve_target_entity,
     stable_event_id,
 )
@@ -179,6 +180,30 @@ def test_resolve_target_entity_ignores_blank_event_value():
     assert resolve_target_entity(event, "target_entity", "OpenAI") == "OpenAI"
 
 
+# -- resolve_domain_context ----------------------------------------------------
+
+def test_resolve_domain_context_prefers_per_event_value():
+    event = {"domain_context": "Apple's App Store enforces a 15-30% commission."}
+    assert (
+        resolve_domain_context(event, "domain_context", "generic default")
+        == "Apple's App Store enforces a 15-30% commission."
+    )
+
+
+def test_resolve_domain_context_falls_back_to_default():
+    assert resolve_domain_context({}, "domain_context", "generic default") == "generic default"
+
+
+def test_resolve_domain_context_returns_none_without_either():
+    ## Unlike target entity, domain context is optional -- no error.
+    assert resolve_domain_context({}, "domain_context", None) is None
+
+
+def test_resolve_domain_context_ignores_blank_event_value():
+    event = {"domain_context": "   "}
+    assert resolve_domain_context(event, "domain_context", None) is None
+
+
 # -- normalize_events ---------------------------------------------------------
 
 def _normalize(events, **overrides):
@@ -247,3 +272,22 @@ def test_normalize_events_default_target_entity_applies_to_all():
     normalized = _normalize(events, default_target_entity="OpenAI")
     assert normalized[0]["_target_entity"] == "OpenAI"
     assert normalized[1]["_target_entity"] == "Apple"
+
+
+def test_normalize_events_domain_context_is_none_when_unset():
+    events = [{"event_id": "1", "title": "A", "target_entity": "Apple"}]
+    [event] = _normalize(events)
+    assert event["_domain_context"] is None
+
+
+def test_normalize_events_picks_up_per_event_domain_context():
+    events = [
+        {
+            "event_id": "1",
+            "title": "A",
+            "target_entity": "Apple",
+            "domain_context": "Apple enforces a 15-30% App Store commission.",
+        }
+    ]
+    [event] = _normalize(events)
+    assert event["_domain_context"] == "Apple enforces a 15-30% App Store commission."

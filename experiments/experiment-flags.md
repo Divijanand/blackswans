@@ -104,6 +104,8 @@ Option C: Accept domain-agnostic scoring as a known limitation and seed the labe
 
 **Recommended approach for this phase:** Option C is the pragmatic choice for getting first results quickly. Options A and B become important for the paper methodology section and should be implemented for the validation run.
 
+**Status:** Option A is implemented. `scripts/parallel_classifier.py` accepts an optional per-event `domain_context` field (configurable via `--domain-context-field`, or a single default via `--domain-context`), inserted into the prompt as a `DOMAIN_CONTEXT:` block right after `TARGET_ENTITY:` when set. It's opt-in — events without it are unaffected. `data/input/test_events.jsonl` and `data/input/seeded-validation-set.jsonl` both set it per event as a reference example. Option B (asking the model to surface domain mechanics itself before classifying) is not implemented; still worth doing for the validation-run methodology section per the original recommendation above.
+
 ---
 
 ## Flag 7: Rate Limits Will Bite During Parallelized Runs
@@ -135,6 +137,8 @@ These seeded examples must not be mixed into the blind test set that measures ho
 - `blind-test-set.jsonl` - post-cutoff events the model has not seen; used to generate forward-looking classifications
 
 If you mix these, your accuracy numbers will be inflated by the model's ability to recognize famous events it already knows about, not its ability to classify genuinely novel ones.
+
+**Status:** A first draft exists — `data/input/seeded-validation-set.jsonl` (7 events: the 5 real events also in `test_events.jsonl`, plus both perspectives of the NASDAQ/SpaceX benchmark case study from `Company-Level Classifier.md`). One deviation from the wording above: the expected labels live in a **separate** file, `data/input/seeded-validation-labels.jsonl` ({event_id, expected_classification}), not inline in the event JSON — an inline `expected_classification` field would flow straight into `FULL_EVENT_JSON` in the prompt and leak the answer to the model. Score a run against it with `python scripts/analyze_results.py --results <path> --ground-truth data/input/seeded-validation-labels.jsonl`. The labels themselves are Claude's draft reasoning through the framework, not yet confirmed by Yevhen — flagged per-row with a confidence level and source (some match this repo's own existing worked examples in `Shock Classifier.md`/`Altman Firing.md`/etc.; one — DeepSeek R1 vs. NVIDIA — is deliberately left as "medium confidence, debatable" as a discussion point). No `blind-test-set.jsonl` yet.
 
 ---
 
