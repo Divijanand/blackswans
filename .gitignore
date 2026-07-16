@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Classifier run output — large and regenerable, not source
+runs/*.jsonl
+!runs/.gitkeep
