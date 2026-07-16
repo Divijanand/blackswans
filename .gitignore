@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+.pytest_cache/
 
 # Classifier run output — large and regenerable, not source
 runs/*.jsonl

@@ -11,6 +11,7 @@ script that runs that classification at scale across LLMs via
 ```
 prompts/      Classifier prompt templates (the reusable framework + case banks)
 scripts/      parallel_classifier.py — batch-runs events through an OpenRouter model
+tests/        pytest suite for scripts/parallel_classifier.py (no network calls)
 data/         Input event sets (data/input) and processed output (data/processed)
 runs/         Classifier output JSONL lands here (gitignored, .gitkeep only)
 experiments/  Model tier list and engineering flags/risks for the scale run
@@ -42,6 +43,33 @@ cp .env.example .env             # fill in OPENROUTER_API_KEY
 export OPENROUTER_API_KEY="sk-or-..."   # or set it in .env and source it
 ```
 
+## Testing
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+The suite (`tests/`) covers every pure function in `scripts/parallel_classifier.py` —
+event loading/normalization, target-entity resolution, the response schema, JSON
+parsing/validation, checkpointing — plus `call_openrouter`'s `json_schema` →
+`json_object` → `none` fallback chain against a fake OpenAI client, so none of it makes a
+real network call or costs API credits. It does **not** test that a real model actually
+returns a sane classification — for that, run a small `--workers 1` batch against
+`data/input/test_events.jsonl` (which has 5 real seed events) and inspect the output:
+
+```bash
+python scripts/parallel_classifier.py \
+  --input data/input/test_events.jsonl \
+  --output runs/smoke_test.jsonl \
+  --prompt "prompts/Company-Level Classifier.md" \
+  --model "meta-llama/llama-3.1-8b-instruct" \
+  --workers 1
+```
+
+`data/input/yehven_events.jsonl` is intentionally left empty — it's meant to hold
+Yevhen's own event set, not fabricated data.
+
 ## Running the classifier
 
 `scripts/parallel_classifier.py` reads an event set, sends each event through an
@@ -58,9 +86,11 @@ python scripts/parallel_classifier.py \
   --output runs/results.jsonl \
   --prompt "prompts/Company-Level Classifier.md" \
   --model "meta-llama/llama-3.3-70b-instruct" \
-  --target-entity "Apple" \
   --workers 10
 ```
+
+(`data/input/test_events.jsonl` already sets `target_entity` per event; use
+`--target-entity "Apple"` instead if your input doesn't set its own.)
 
 Key flags (see `--help` for the full list):
 
