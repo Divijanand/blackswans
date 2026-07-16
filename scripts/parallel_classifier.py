@@ -45,20 +45,20 @@ from pydantic import BaseModel, Field, create_model
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 REQUIRED_MODEL_FIELDS = [
-    "classification",
-    "check1_verdict",
-    "check2_verdict",
-    "check3_verdict",
+    "target_entity_context",
     "load_bearing_assumption",
-    "reasoning",
+    "check_walkthrough",
+    "classification",
+    "strategic_impact",
 ]
 
 DEFAULT_LABELS = [
     "Black Swan",
     "Gray Rhino",
     "Gray Swan",
+    "White Swan",
     "Broken Prior",
-    "Not Relevant",
+    "Neither",
 ]
 
 COMMON_TEXT_FIELDS = [
@@ -281,35 +281,32 @@ def load_existing_results(output_path: Path, retry_failed: bool) -> Set[str]:
 
 def make_response_model(labels: Sequence[str]) -> Type[BaseModel]:
     ## Pydantic model used for OpenAI/OpenRouter structured outputs.
+    ## Mirrors the five "Output Format" headers from the Company-Level
+    ## Classifier prompt (prompts/Company-Level Classifier.md) one-for-one.
     ## The classification field's allowed values are derived from --labels.
     classification_type = Literal[tuple(labels)]  # type: ignore[valid-type]
-    verdict_type = Literal["YES", "NO"]
 
     return create_model(
         "EventClassification",
-        classification=(
-            classification_type,
-            Field(description="Final event classification."),
-        ),
-        check1_verdict=(
-            verdict_type,
-            Field(description="Verdict for classifier check 1."),
-        ),
-        check2_verdict=(
-            verdict_type,
-            Field(description="Verdict for classifier check 2."),
-        ),
-        check3_verdict=(
-            verdict_type,
-            Field(description="Verdict for classifier check 3."),
+        target_entity_context=(
+            str,
+            Field(description="Target Entity Context: 1-sentence framing of the event from the Target Entity's perspective."),
         ),
         load_bearing_assumption=(
             str,
-            Field(description="The assumption whose failure makes this event matter."),
+            Field(description="Load-Bearing Assumption Violated: what core belief or financial model of the Target Entity did this shatter? (1 sentence)"),
         ),
-        reasoning=(
+        check_walkthrough=(
             str,
-            Field(description="Concise reasoning for the classification."),
+            Field(description="Step-by-Step Check Walkthrough: document Check 1 (Internal Topology Shift), Check 2 (Internal Horizon Test), and Check 3 (Internal Architectural Mechanics)."),
+        ),
+        classification=(
+            classification_type,
+            Field(description="Final Taxonomic Classification for Target Entity."),
+        ),
+        strategic_impact=(
+            str,
+            Field(description="Strategic Impact on Target: how did the Target Entity's internal math change?"),
         ),
     )
 
@@ -334,14 +331,12 @@ def build_messages(
             json.dumps(list(labels), ensure_ascii=False),
             "",
             "Required JSON fields:",
-            "- classification",
-            "- check1_verdict",
-            "- check2_verdict",
-            "- check3_verdict",
+            "- target_entity_context",
             "- load_bearing_assumption",
-            "- reasoning",
+            "- check_walkthrough",
+            "- classification",
+            "- strategic_impact",
             "",
-            'The three verdict fields must be exactly "YES" or "NO".',
             "Do not include markdown.",
             "Do not wrap the JSON in code fences.",
             "Do not add commentary outside the JSON.",
@@ -563,24 +558,6 @@ def normalize_classification(value: Any, labels: Sequence[str]) -> Any:
     return value_str
 
 
-def normalize_verdict(value: Any) -> Any:
-    if isinstance(value, bool):
-        return "YES" if value else "NO"
-
-    if value is None:
-        return value
-
-    value_str = str(value).strip().upper()
-
-    if value_str in {"YES", "Y", "TRUE", "1"}:
-        return "YES"
-
-    if value_str in {"NO", "N", "FALSE", "0"}:
-        return "NO"
-
-    return value_str
-
-
 def normalize_model_result(
     result: Dict[str, Any],
     labels: Sequence[str],
@@ -592,10 +569,6 @@ def normalize_model_result(
             result["classification"],
             labels,
         )
-
-    for key in ["check1_verdict", "check2_verdict", "check3_verdict"]:
-        if key in result:
-            result[key] = normalize_verdict(result[key])
 
     return result
 
@@ -619,14 +592,6 @@ def validate_model_result(
             f"Invalid classification: {classification!r}. "
             f"Expected one of: {list(labels)}"
         )
-
-    for key in ["check1_verdict", "check2_verdict", "check3_verdict"]:
-        verdict = result.get(key)
-
-        if verdict is not None and verdict not in {"YES", "NO"}:
-            errors.append(
-                f"Invalid {key}: {verdict!r}. Expected 'YES' or 'NO'."
-            )
 
     return errors
 
