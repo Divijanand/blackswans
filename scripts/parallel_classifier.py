@@ -240,7 +240,7 @@ def load_existing_results(output_path: Path, retry_failed: bool) -> Set[str]:
     ## If retry_failed is False:
     ##     Any prior row with event_id is considered checkpointed.
     ##
-    ## If retry_failed is True:
+    ## If retry_failed is True: 
     ##     Only prior rows with status == "ok" are considered done.
     ##     Failed/parse_error/request_error rows will be retried.
     done_ids: Set[str] = set()
