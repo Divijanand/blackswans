@@ -44,7 +44,11 @@ export OPENROUTER_API_KEY="sk-or-..."   # or set it in .env and source it
 
 `scripts/parallel_classifier.py` reads an event set, sends each event through an
 OpenRouter model with a classifier prompt, and writes results to JSONL with
-checkpoint/resume support (already-processed `event_id`s are skipped on rerun).
+checkpoint/resume support (already-processed `event_id`s are skipped on rerun). It calls
+OpenRouter via the [OpenAI Python client](https://github.com/openai/openai-python) pointed
+at OpenRouter's OpenAI-compatible endpoint (`base_url="https://openrouter.ai/api/v1"`),
+using the client's built-in [structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+support to enforce the response shape.
 
 ```bash
 python scripts/parallel_classifier.py \
@@ -60,14 +64,16 @@ Key flags (see `--help` for the full list):
 - `--input` — `.jsonl`, `.json` (list or `{"events": [...]}`), or `.csv`
 - `--labels` — comma-separated classification labels (defaults to the five taxonomic
   categories above)
-- `--structured-mode` — `json_schema` (default, strict OpenRouter structured output),
-  `json_object`, or `none`; falls back automatically if a model rejects the stricter mode
+- `--structured-mode` — `json_schema` (default, strict structured output via a Pydantic
+  model), `json_object`, or `none`; falls back automatically if a model/provider rejects
+  the stricter mode
 - `--dry-run` — builds and prints the first event's prompt without calling the API
 
-The JSON schema each model is asked to conform to (`classification`, three check
-verdicts, load-bearing assumption, reasoning) is defined in code in
-[`make_response_schema`](scripts/parallel_classifier.py) inside the script — there's no
-separate schema file to keep in sync.
+The schema each model is asked to conform to (`classification`, three check verdicts,
+load-bearing assumption, reasoning) is a Pydantic model built in
+[`make_response_model`](scripts/parallel_classifier.py) — the `classification` field's
+allowed values come straight from `--labels`, so there's no separate schema file to keep
+in sync.
 
 Output rows include `status` (`ok`, `invalid_schema`, `parse_error`, `request_error`,
 `thread_crash`), latency, token usage, and — on failure — the raw model response for

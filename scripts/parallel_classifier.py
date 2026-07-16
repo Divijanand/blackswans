@@ -3,7 +3,8 @@
 ## Core guarantees:
 ## 1. Concurrent model calls with ThreadPoolExecutor.
 ## 2. Checkpointing via JSONL append-as-completed.
-## 3. Structured JSON outputs with parse fallback.
+## 3. Structured JSON outputs (via the OpenAI client's Pydantic-backed
+##    structured outputs) with parse fallback.
 ## 4. Resume support: already-processed event_ids are skipped.
 ## 5. Failed rows are saved instead of crashing the whole run.
 ##
@@ -31,19 +32,17 @@ import csv
 import hashlib
 import json
 import os
-import random
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Literal, Optional, Sequence, Set, Tuple, Type
 
-import requests
+from openai import APIStatusError, OpenAI
+from pydantic import BaseModel, Field, create_model
 
 
-OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
-
-RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 REQUIRED_MODEL_FIELDS = [
     "classification",
@@ -240,7 +239,7 @@ def load_existing_results(output_path: Path, retry_failed: bool) -> Set[str]:
     ## If retry_failed is False:
     ##     Any prior row with event_id is considered checkpointed.
     ##
-    ## If retry_failed is True: 
+    ## If retry_failed is True:
     ##     Only prior rows with status == "ok" are considered done.
     ##     Failed/parse_error/request_error rows will be retried.
     done_ids: Set[str] = set()
@@ -280,43 +279,39 @@ def load_existing_results(output_path: Path, retry_failed: bool) -> Set[str]:
     return done_ids
 
 
-def make_response_schema(labels: Sequence[str]) -> Dict[str, Any]:
-    ## JSON schema used for OpenRouter structured outputs.
-    return {
-        "type": "object",
-        "properties": {
-            "classification": {
-                "type": "string",
-                "enum": list(labels),
-                "description": "Final event classification.",
-            },
-            "check1_verdict": {
-                "type": "string",
-                "enum": ["YES", "NO"],
-                "description": "Verdict for classifier check 1.",
-            },
-            "check2_verdict": {
-                "type": "string",
-                "enum": ["YES", "NO"],
-                "description": "Verdict for classifier check 2.",
-            },
-            "check3_verdict": {
-                "type": "string",
-                "enum": ["YES", "NO"],
-                "description": "Verdict for classifier check 3.",
-            },
-            "load_bearing_assumption": {
-                "type": "string",
-                "description": "The assumption whose failure makes this event matter.",
-            },
-            "reasoning": {
-                "type": "string",
-                "description": "Concise reasoning for the classification.",
-            },
-        },
-        "required": REQUIRED_MODEL_FIELDS,
-        "additionalProperties": False,
-    }
+def make_response_model(labels: Sequence[str]) -> Type[BaseModel]:
+    ## Pydantic model used for OpenAI/OpenRouter structured outputs.
+    ## The classification field's allowed values are derived from --labels.
+    classification_type = Literal[tuple(labels)]  # type: ignore[valid-type]
+    verdict_type = Literal["YES", "NO"]
+
+    return create_model(
+        "EventClassification",
+        classification=(
+            classification_type,
+            Field(description="Final event classification."),
+        ),
+        check1_verdict=(
+            verdict_type,
+            Field(description="Verdict for classifier check 1."),
+        ),
+        check2_verdict=(
+            verdict_type,
+            Field(description="Verdict for classifier check 2."),
+        ),
+        check3_verdict=(
+            verdict_type,
+            Field(description="Verdict for classifier check 3."),
+        ),
+        load_bearing_assumption=(
+            str,
+            Field(description="The assumption whose failure makes this event matter."),
+        ),
+        reasoning=(
+            str,
+            Field(description="Concise reasoning for the classification."),
+        ),
+    )
 
 
 def build_messages(
@@ -376,51 +371,11 @@ def build_messages(
     ]
 
 
-def make_payload(
-    model_id: str,
-    messages: List[Dict[str, str]],
-    labels: Sequence[str],
-    structured_mode: str,
-    temperature: float,
-) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {
-        "model": model_id,
-        "messages": messages,
-        "temperature": temperature,
-    }
+def openrouter_headers() -> Dict[str, str]:
+    ## Optional OpenRouter metadata headers, sent on every request via the
+    ## client's default_headers. Safe to omit.
+    headers: Dict[str, str] = {}
 
-    if structured_mode == "json_schema":
-        payload["response_format"] = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "black_swan_event_classification",
-                "strict": True,
-                "schema": make_response_schema(labels),
-            },
-        }
-
-    elif structured_mode == "json_object":
-        payload["response_format"] = {
-            "type": "json_object",
-        }
-
-    elif structured_mode == "none":
-        pass
-
-    else:
-        raise ValueError(f"Unknown structured_mode: {structured_mode}")
-
-    return payload
-
-
-def openrouter_headers(api_key: str) -> Dict[str, str]:
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    ## Optional OpenRouter metadata headers.
-    ## Safe to omit.
     referer = os.getenv("OPENROUTER_HTTP_REFERER")
     app_title = os.getenv("OPENROUTER_APP_TITLE", "Project Jupiter Classifier")
 
@@ -433,113 +388,33 @@ def openrouter_headers(api_key: str) -> Dict[str, str]:
     return headers
 
 
-def retry_sleep_seconds(response: Optional[requests.Response], attempt: int) -> float:
-    if response is not None:
-        retry_after = response.headers.get("Retry-After")
-
-        if retry_after:
-            try:
-                return min(float(retry_after), 120.0)
-            except ValueError:
-                pass
-
-    return min((2 ** attempt) + random.random(), 60.0)
-
-
-def post_with_retries(
-    payload: Dict[str, Any],
-    headers: Dict[str, str],
-    timeout: int,
-    max_retries: int,
-) -> requests.Response:
-    last_exc: Optional[BaseException] = None
-
-    for attempt in range(max_retries + 1):
-        response: Optional[requests.Response] = None
-
-        try:
-            response = requests.post(
-                OPENROUTER_CHAT_URL,
-                headers=headers,
-                json=payload,
-                timeout=timeout,
-            )
-
-            if response.status_code in RETRYABLE_STATUS_CODES:
-                if attempt >= max_retries:
-                    response.raise_for_status()
-
-                sleep_for = retry_sleep_seconds(response, attempt)
-                time.sleep(sleep_for)
-                continue
-
-            response.raise_for_status()
-            return response
-
-        except requests.RequestException as exc:
-            last_exc = exc
-
-            status_code = None
-
-            if getattr(exc, "response", None) is not None:
-                status_code = exc.response.status_code
-
-            ## Do not retry ordinary 4xx errors except 429.
-            if status_code is not None and status_code not in RETRYABLE_STATUS_CODES:
-                raise
-
-            if attempt >= max_retries:
-                raise
-
-            sleep_for = retry_sleep_seconds(response, attempt)
-            time.sleep(sleep_for)
-
-    raise RuntimeError(f"Request failed after retries: {last_exc}")
-
-
-def extract_message_content(response_json: Dict[str, Any]) -> str:
-    try:
-        content = response_json["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise ValueError(
-            f"Unexpected OpenRouter response shape: {response_json}"
-        ) from exc
-
-    if isinstance(content, str):
-        return content
-
-    if isinstance(content, list):
-        parts: List[str] = []
-
-        for item in content:
-            if isinstance(item, dict):
-                if "text" in item:
-                    parts.append(str(item["text"]))
-                elif "content" in item:
-                    parts.append(str(item["content"]))
-            else:
-                parts.append(str(item))
-
-        return "".join(parts)
-
-    return str(content)
+def build_client(api_key: str, timeout: int, max_retries: int) -> OpenAI:
+    ## OpenAI client pointed at OpenRouter's OpenAI-compatible endpoint.
+    ## max_retries/timeout are handled by the client (429/5xx/connection
+    ## errors are retried with backoff automatically).
+    return OpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=api_key,
+        timeout=timeout,
+        max_retries=max_retries,
+        default_headers=openrouter_headers(),
+    )
 
 
 def call_openrouter(
-    api_key: str,
+    client: OpenAI,
     model_id: str,
     messages: List[Dict[str, str]],
-    labels: Sequence[str],
+    response_model: Type[BaseModel],
     structured_mode: str,
     fallback_structured_mode: bool,
     temperature: float,
-    timeout: int,
-    max_retries: int,
-) -> Tuple[str, Optional[Dict[str, Any]], str]:
-    ## Calls OpenRouter.
+) -> Tuple[str, Optional[Dict[str, Any]], str, Optional[BaseModel]]:
+    ## Calls OpenRouter through the OpenAI client.
     ##
     ## Returns:
-    ##     raw_content, usage, structured_mode_used
+    ##     raw_content, usage, structured_mode_used, parsed_model
+    ##     parsed_model is only set when structured_mode_used == "json_schema".
     modes_to_try = [structured_mode]
 
     if fallback_structured_mode:
@@ -549,60 +424,60 @@ def call_openrouter(
             modes_to_try.append("none")
 
     ## Remove duplicates while preserving order.
-    deduped_modes: List[str] = []
-
-    for mode in modes_to_try:
-        if mode not in deduped_modes:
-            deduped_modes.append(mode)
-
-    headers = openrouter_headers(api_key)
+    deduped_modes = list(dict.fromkeys(modes_to_try))
 
     last_error: Optional[BaseException] = None
 
     for idx, mode in enumerate(deduped_modes):
-        payload = make_payload(
-            model_id=model_id,
-            messages=messages,
-            labels=labels,
-            structured_mode=mode,
-            temperature=temperature,
-        )
-
         try:
-            response = post_with_retries(
-                payload=payload,
-                headers=headers,
-                timeout=timeout,
-                max_retries=max_retries,
+            if mode == "json_schema":
+                completion = client.chat.completions.parse(
+                    model=model_id,
+                    messages=messages,
+                    temperature=temperature,
+                    response_format=response_model,
+                )
+                choice = completion.choices[0]
+
+                if choice.finish_reason == "length":
+                    raise ValueError("Response truncated (finish_reason=length).")
+
+                if choice.message.refusal:
+                    raise ValueError(f"Model refused to respond: {choice.message.refusal}")
+
+                usage = completion.usage.model_dump() if completion.usage else None
+                return choice.message.content or "", usage, mode, choice.message.parsed
+
+            create_kwargs: Dict[str, Any] = {}
+
+            if mode == "json_object":
+                create_kwargs["response_format"] = {"type": "json_object"}
+
+            completion = client.chat.completions.create(
+                model=model_id,
+                messages=messages,
+                temperature=temperature,
+                **create_kwargs,
             )
+            choice = completion.choices[0]
 
-            response_json = response.json()
-            raw_content = extract_message_content(response_json)
-            usage = response_json.get("usage")
+            if choice.finish_reason == "length":
+                raise ValueError("Response truncated (finish_reason=length).")
 
-            return raw_content, usage, mode
+            usage = completion.usage.model_dump() if completion.usage else None
+            return choice.message.content or "", usage, mode, None
 
-        except requests.HTTPError as exc:
+        except APIStatusError as exc:
             last_error = exc
-            status_code = exc.response.status_code if exc.response is not None else None
 
             ## Some models/providers may reject structured output modes.
             ## If so, fall back to weaker JSON forcing instead of killing the run.
-            if status_code in {400, 422} and idx < len(deduped_modes) - 1:
+            if exc.status_code in (400, 422) and idx < len(deduped_modes) - 1:
                 continue
 
-            body = ""
-
-            if exc.response is not None:
-                body = exc.response.text[:1000]
-
             raise RuntimeError(
-                f"OpenRouter HTTP error {status_code}: {body}"
+                f"OpenRouter HTTP error {exc.status_code}: {str(exc)[:1000]}"
             ) from exc
-
-        except Exception as exc:
-            last_error = exc
-            raise
 
     raise RuntimeError(f"OpenRouter call failed: {last_error}")
 
@@ -778,15 +653,14 @@ def event_metadata(event: Dict[str, Any]) -> Dict[str, Any]:
 
 def classify_event(
     event: Dict[str, Any],
-    api_key: str,
+    client: OpenAI,
     model_id: str,
     classifier_prompt: str,
     labels: Sequence[str],
+    response_model: Type[BaseModel],
     structured_mode: str,
     fallback_structured_mode: bool,
     temperature: float,
-    timeout: int,
-    max_retries: int,
 ) -> Dict[str, Any]:
     event_id = event["_event_id"]
     started = time.time()
@@ -805,22 +679,26 @@ def classify_event(
     )
 
     try:
-        raw_content, usage, mode_used = call_openrouter(
-            api_key=api_key,
+        raw_content, usage, mode_used, parsed_obj = call_openrouter(
+            client=client,
             model_id=model_id,
             messages=messages,
-            labels=labels,
+            response_model=response_model,
             structured_mode=structured_mode,
             fallback_structured_mode=fallback_structured_mode,
             temperature=temperature,
-            timeout=timeout,
-            max_retries=max_retries,
         )
 
         try:
-            parsed = parse_json_object(raw_content)
-            parsed = normalize_model_result(parsed, labels)
-            schema_errors = validate_model_result(parsed, labels)
+            if parsed_obj is not None:
+                ## response_format=response_model already validated required
+                ## fields and enum values, so there's nothing left to check.
+                parsed = parsed_obj.model_dump()
+                schema_errors: List[str] = []
+            else:
+                parsed = parse_json_object(raw_content)
+                parsed = normalize_model_result(parsed, labels)
+                schema_errors = validate_model_result(parsed, labels)
 
             status = "ok" if not schema_errors else "invalid_schema"
 
@@ -867,17 +745,16 @@ def append_jsonl(path: Path, row: Dict[str, Any]) -> None:
 
 def run_classifier(
     events: List[Dict[str, Any]],
-    api_key: str,
+    client: OpenAI,
     model_id: str,
     classifier_prompt: str,
     labels: Sequence[str],
+    response_model: Type[BaseModel],
     output_path: Path,
     workers: int,
     structured_mode: str,
     fallback_structured_mode: bool,
     temperature: float,
-    timeout: int,
-    max_retries: int,
     retry_failed: bool,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -909,15 +786,14 @@ def run_classifier(
             executor.submit(
                 classify_event,
                 event,
-                api_key,
+                client,
                 model_id,
                 classifier_prompt,
                 labels,
+                response_model,
                 structured_mode,
                 fallback_structured_mode,
                 temperature,
-                timeout,
-                max_retries,
             ): event["_event_id"]
             for event in remaining_events
         }
@@ -1053,7 +929,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--max-retries",
         default=4,
         type=int,
-        help="Retries for 429/5xx/network errors.",
+        help="Client-side retries for 429/5xx/connection errors.",
     )
 
     parser.add_argument(
@@ -1092,6 +968,7 @@ def main() -> int:
         return 2
 
     labels = parse_labels(args.labels)
+    response_model = make_response_model(labels)
 
     classifier_prompt = load_prompt(args.prompt)
 
@@ -1121,19 +998,24 @@ def main() -> int:
 
         return 0
 
+    client = build_client(
+        api_key=api_key or "",
+        timeout=args.timeout,
+        max_retries=args.max_retries,
+    )
+
     run_classifier(
         events=events,
-        api_key=api_key or "",
+        client=client,
         model_id=args.model,
         classifier_prompt=classifier_prompt,
         labels=labels,
+        response_model=response_model,
         output_path=args.output,
         workers=args.workers,
         structured_mode=args.structured_mode,
         fallback_structured_mode=not args.no_structured_fallback,
         temperature=args.temperature,
-        timeout=args.timeout,
-        max_retries=args.max_retries,
         retry_failed=args.retry_failed,
     )
 
