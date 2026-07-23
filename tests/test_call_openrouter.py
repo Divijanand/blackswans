@@ -116,6 +116,7 @@ def test_json_schema_mode_returns_parsed_object(response_model):
         structured_mode="json_schema",
         fallback_structured_mode=True,
         temperature=0.0,
+        max_tokens=1000,
     )
 
     assert mode_used == "json_schema"
@@ -143,6 +144,7 @@ def test_json_schema_refusal_raises_without_trying_fallback(response_model):
             structured_mode="json_schema",
             fallback_structured_mode=True,
             temperature=0.0,
+            max_tokens=1000,
         )
 
     ## A refusal isn't a schema-support problem, so it shouldn't fall back.
@@ -167,6 +169,7 @@ def test_json_schema_truncation_raises(response_model):
             structured_mode="json_schema",
             fallback_structured_mode=True,
             temperature=0.0,
+            max_tokens=1000,
         )
 
 
@@ -188,6 +191,7 @@ def test_falls_back_to_json_object_on_400(response_model):
         structured_mode="json_schema",
         fallback_structured_mode=True,
         temperature=0.0,
+        max_tokens=1000,
     )
 
     assert mode_used == "json_object"
@@ -214,6 +218,7 @@ def test_fallback_messages_include_json_forcing_instruction(response_model):
         structured_mode="json_schema",
         fallback_structured_mode=True,
         temperature=0.0,
+        max_tokens=1000,
     )
 
     sent_system_content = completions.create_calls[0]["messages"][0]["content"]
@@ -236,6 +241,7 @@ def test_no_fallback_raises_immediately_on_400(response_model):
             structured_mode="json_schema",
             fallback_structured_mode=False,
             temperature=0.0,
+            max_tokens=1000,
         )
 
     assert len(completions.create_calls) == 0
@@ -258,6 +264,7 @@ def test_exhausts_all_fallback_modes_and_raises(response_model):
             structured_mode="json_schema",
             fallback_structured_mode=True,
             temperature=0.0,
+            max_tokens=1000,
         )
 
     assert len(completions.create_calls) == 2
@@ -278,6 +285,7 @@ def test_non_retryable_status_code_raises_without_fallback(response_model):
             structured_mode="json_schema",
             fallback_structured_mode=True,
             temperature=0.0,
+            max_tokens=1000,
         )
 
     assert len(completions.create_calls) == 0

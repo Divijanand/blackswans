@@ -49,6 +49,21 @@ def load_jsonl(path: Path) -> List[Dict[str, Any]]:
     return rows
 
 
+def dedupe_by_event_id(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    ## --retry-failed appends a new row for a retried event rather than
+    ## replacing the old failed one (parallel_classifier.py's checkpointing
+    ## treats the file as an append log, see load_existing_results). Keep
+    ## only the last row per event_id -- the most recent attempt -- so a
+    ## stale failed row doesn't also get counted alongside its retry.
+    deduped: Dict[Any, Dict[str, Any]] = {}
+
+    for idx, row in enumerate(rows):
+        key = row.get("event_id", ("_no_event_id", idx))
+        deduped[key] = row
+
+    return list(deduped.values())
+
+
 def load_manifest(results_path: Path) -> Optional[Dict[str, Any]]:
     manifest_path = manifest_path_for(results_path)
 
@@ -303,6 +318,17 @@ def main() -> int:
     if not rows:
         print(f"No rows found in {args.results}")
         return 0
+
+    deduped_rows = dedupe_by_event_id(rows)
+
+    if len(deduped_rows) != len(rows):
+        print(
+            f"Note: {len(rows) - len(deduped_rows)} duplicate event_id row(s) "
+            "found (likely from --retry-failed); keeping the latest attempt "
+            "for each."
+        )
+
+    rows = deduped_rows
 
     manifest = load_manifest(args.results)
     ground_truth = load_ground_truth(args.ground_truth) if args.ground_truth else None

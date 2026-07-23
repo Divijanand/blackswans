@@ -115,6 +115,8 @@ Key flags (see `--help` for the full list):
   prompt entirely if neither is set
 - `--cost-per-million-input` / `--cost-per-million-output` — USD rates for the end-of-run
   cost estimate (check the model's OpenRouter pricing page; omit to skip the estimate)
+- `--max-tokens` — completion token cap per call (default 2000); prevents a stuck small
+  model from generating all the way to the provider's own ceiling (`experiments/experiment-flags.md` Flag 8)
 - `--dry-run` — builds and prints the first event's prompt without calling the API
 
 The schema each model is asked to conform to is a Pydantic model

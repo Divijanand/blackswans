@@ -126,6 +126,14 @@ The classifier requires a structured JSON output covering Load-Bearing Assumptio
 
 If you set `max_tokens` too low, the model will truncate mid-response, producing malformed JSON that fails to parse. Set a minimum of 1000 tokens for all classifier runs. For reasoning models like DeepSeek R1 which produce chain-of-thought before the JSON, set 2000 or higher.
 
+**Status:** `parallel_classifier.py` didn't cap `max_tokens` at all until 2026-07-23. Running the
+full Apple-events dataset (1,139 events) through `meta-llama/llama-3.1-8b-instruct` surfaced the
+opposite failure mode from the one above: 24/1,139 calls (~2.1%) hit `LengthFinishReasonError`
+after generating the full 65,536-token provider ceiling — an 8B-model repetition-loop failure
+mode — with one call taking 1,173 seconds. Fixed by adding a `--max-tokens` flag (default 2000,
+threaded through `call_openrouter`/`classify_event`/`run_classifier` and recorded in the run
+manifest) so a stuck generation gets cut off instead of running to the provider's ceiling.
+
 ---
 
 ## Flag 9: Seeded Positive Examples Must Be Kept Separate from the Blind Test Set

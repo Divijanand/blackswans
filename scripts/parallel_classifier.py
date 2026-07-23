@@ -501,6 +501,7 @@ def call_openrouter(
     structured_mode: str,
     fallback_structured_mode: bool,
     temperature: float,
+    max_tokens: int,
 ) -> Tuple[str, Optional[Dict[str, Any]], str, Optional[BaseModel]]:
     ## Calls OpenRouter through the OpenAI client.
     ##
@@ -527,6 +528,7 @@ def call_openrouter(
                     model=model_id,
                     messages=messages,
                     temperature=temperature,
+                    max_tokens=max_tokens,
                     response_format=response_model,
                 )
                 choice = completion.choices[0]
@@ -562,6 +564,7 @@ def call_openrouter(
                 model=model_id,
                 messages=fallback_messages,
                 temperature=temperature,
+                max_tokens=max_tokens,
                 **create_kwargs,
             )
             choice = completion.choices[0]
@@ -736,6 +739,7 @@ def classify_event(
     structured_mode: str,
     fallback_structured_mode: bool,
     temperature: float,
+    max_tokens: int,
 ) -> Dict[str, Any]:
     event_id = event["_event_id"]
     started = time.time()
@@ -763,6 +767,7 @@ def classify_event(
             structured_mode=structured_mode,
             fallback_structured_mode=fallback_structured_mode,
             temperature=temperature,
+            max_tokens=max_tokens,
         )
 
         try:
@@ -860,6 +865,7 @@ def build_run_manifest(
     structured_mode: str,
     fallback_structured_mode: bool,
     temperature: float,
+    max_tokens: int,
     workers: int,
     id_field: str,
     text_field: Optional[str],
@@ -882,6 +888,7 @@ def build_run_manifest(
         "structured_mode": structured_mode,
         "fallback_structured_mode": fallback_structured_mode,
         "temperature": temperature,
+        "max_tokens": max_tokens,
         "workers": workers,
         "id_field": id_field,
         "text_field": text_field,
@@ -914,6 +921,7 @@ def run_classifier(
     structured_mode: str,
     fallback_structured_mode: bool,
     temperature: float,
+    max_tokens: int,
     retry_failed: bool,
     cost_per_million_input: Optional[float] = None,
     cost_per_million_output: Optional[float] = None,
@@ -956,6 +964,7 @@ def run_classifier(
                 structured_mode,
                 fallback_structured_mode,
                 temperature,
+                max_tokens,
             ): event["_event_id"]
             for event in remaining_events
         }
@@ -1144,6 +1153,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--max-tokens",
+        default=2000,
+        type=int,
+        help=(
+            "Max completion tokens per call. Caps runaway generations (some "
+            "small models loop until they hit the provider's own ceiling, "
+            "e.g. 65536, wasting cost and time) -- see experiment-flags.md "
+            "Flag 8/10."
+        ),
+    )
+
+    parser.add_argument(
         "--timeout",
         default=90,
         type=int,
@@ -1259,6 +1280,7 @@ def main() -> int:
         structured_mode=args.structured_mode,
         fallback_structured_mode=not args.no_structured_fallback,
         temperature=args.temperature,
+        max_tokens=args.max_tokens,
         workers=workers,
         id_field=args.id_field,
         text_field=args.text_field,
@@ -1283,6 +1305,7 @@ def main() -> int:
         structured_mode=args.structured_mode,
         fallback_structured_mode=not args.no_structured_fallback,
         temperature=args.temperature,
+        max_tokens=args.max_tokens,
         retry_failed=args.retry_failed,
         cost_per_million_input=args.cost_per_million_input,
         cost_per_million_output=args.cost_per_million_output,

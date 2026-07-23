@@ -70,6 +70,7 @@ def test_build_run_manifest_captures_run_config(tmp_path):
         structured_mode="json_schema",
         fallback_structured_mode=True,
         temperature=0.0,
+        max_tokens=2000,
         workers=10,
         id_field="event_id",
         text_field=None,
@@ -81,6 +82,7 @@ def test_build_run_manifest_captures_run_config(tmp_path):
     assert manifest["labels"] == ["Black Swan", "Gray Rhino"]
     assert manifest["default_target_entity"] == "Apple"
     assert manifest["event_count"] == 5
+    assert manifest["max_tokens"] == 2000
     assert "started_at" in manifest
 
 
